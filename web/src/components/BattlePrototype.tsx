@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import Image from "next/image";
 import { initialParty, skillLabels, type Fighter, type SkillId, wavePack } from "@/lib/battle-data";
 import { briefingLines, nestRooms, waveChoices, type AppScene, type WaveChoiceId } from "@/lib/app-data";
@@ -9,7 +9,6 @@ type LogEntry = { id: number; text: string };
 type DamagePopup = { id: number; team: "party" | "enemy"; targetId: string; value: number; kind: "damage" | "heal" };
 type EffectLayer = { id: number; team: "party" | "enemy"; label: string; style: "slash" | "burst" | "guard" | "charge" };
 type RewardState = { gold: number; essence: number; score: number };
-
 type RoundResult = { result: string | null; victory: boolean };
 
 const cloneFighter = (fighter: Fighter): Fighter => ({ ...fighter });
@@ -42,9 +41,42 @@ export function BattlePrototype() {
   const [showCutscene, setShowCutscene] = useState(true);
   const [selectedRoom, setSelectedRoom] = useState("forge");
   const [pendingWaveChoice, setPendingWaveChoice] = useState(false);
+  const [audioEnabled, setAudioEnabled] = useState(false);
+
+  const bgmRef = useRef<HTMLAudioElement | null>(null);
+  const hitRef = useRef<HTMLAudioElement | null>(null);
+  const burstRef = useRef<HTMLAudioElement | null>(null);
+  const healRef = useRef<HTMLAudioElement | null>(null);
+  const uiRef = useRef<HTMLAudioElement | null>(null);
 
   const currentWaveLabel = useMemo(() => ["Raiders", "Militia", "Investigators"][waveIndex] ?? "Final", [waveIndex]);
-  const currentBriefing = briefingLines[Math.min(waveIndex, briefingLines.length - 1)];
+  const currentBriefing = useMemo(() => {
+    const roomName = nestRooms.find((room) => room.id === selectedRoom)?.name ?? "Forge";
+    const lines = [
+      `정찰대가 둥지 주변에 집결 중입니다. ${roomName}를 중심으로 방어선을 구성하세요.`,
+      `이번 웨이브는 ${currentWaveLabel} 세력입니다. 템포를 늦출지, 화력을 밀어붙일지 선택이 중요합니다.`,
+      `원작의 감각대로, 짧은 준비-전투-선택의 리듬을 유지하는 것이 핵심입니다.`,
+    ];
+    return lines[Math.min(waveIndex, lines.length - 1)] || briefingLines[0];
+  }, [selectedRoom, currentWaveLabel, waveIndex]);
+
+  const playSfx = (type: "hit" | "burst" | "heal" | "ui") => {
+    if (!audioEnabled) return;
+    const ref = type === "hit" ? hitRef : type === "burst" ? burstRef : type === "heal" ? healRef : uiRef;
+    if (!ref.current) return;
+    ref.current.currentTime = 0;
+    void ref.current.play().catch(() => {});
+  };
+
+  useEffect(() => {
+    if (!bgmRef.current) return;
+    bgmRef.current.volume = 0.25;
+    if (audioEnabled) void bgmRef.current.play().catch(() => {});
+    else {
+      bgmRef.current.pause();
+      bgmRef.current.currentTime = 0;
+    }
+  }, [audioEnabled]);
 
   const appendLog = (text: string) => {
     setLogs((prev) => [{ id: logId, text }, ...prev].slice(0, 10));
@@ -115,6 +147,7 @@ export function BattlePrototype() {
     setShowCutscene(true);
     appendLog(`선택된 둥지 핵심 방: ${nestRooms.find((room) => room.id === selectedRoom)?.name ?? "Forge"}`);
     showWaveBanner("Nest Defense Start");
+    playSfx("ui");
   };
 
   const finalizeRoundResult = ({ result, victory }: RoundResult) => {
@@ -138,14 +171,17 @@ export function BattlePrototype() {
       });
       appendLog("재정비 선택: 아군 전원 HP +6");
       showWaveBanner("Reorganize");
+      playSfx("heal");
     } else if (choiceId === "sharpen-claws") {
       setAttackBuff(2);
       appendLog("공세 준비 선택: 다음 웨이브 아군 공격 +2");
       showWaveBanner("Sharpen Claws");
+      playSfx("ui");
     } else if (choiceId === "reinforce-guard") {
       setGuardBuff(2);
       appendLog("방어 보강 선택: 다음 웨이브 피해 감소 +2");
       showWaveBanner("Reinforce Guard");
+      playSfx("ui");
     }
 
     setParty(nextParty);
@@ -174,13 +210,15 @@ export function BattlePrototype() {
       spawnEffect("party", "GUARD", "guard");
       appendLog("Aegis Drake가 Guard Roar로 진형을 굳혔습니다.");
       showWaveBanner("Guard Roar");
+      playSfx("ui");
     } else if (skill === "focus") {
       nextFocus = 3;
       spawnEffect("party", "FOCUS", "charge");
       appendLog("Ash Fang가 Focus Breath로 다음 타격을 준비합니다.");
       showWaveBanner("Focus Breath");
+      playSfx("ui");
     } else {
-      const skillBonus = skill === "ember" ? 6 : 2;
+      const skillBonus = skill === "ember" ? 5 : 2;
       const target = alive(nextEnemies)[0];
       if (target) {
         const damage = calculateDamage(dealer.atk, target.def, skillBonus + focusBuff + attackBuff + (selectedRoom === "forge" ? 1 : 0));
@@ -191,6 +229,7 @@ export function BattlePrototype() {
         applyHitStop();
         appendLog(`${dealer.name}의 ${skillLabels[skill].label} → ${target.name} ${damage} 피해`);
         showWaveBanner(skillLabels[skill].label);
+        playSfx(skill === "ember" ? "burst" : "hit");
       }
     }
 
@@ -203,6 +242,7 @@ export function BattlePrototype() {
         spawnPopup("party", lowest.id, heal, "heal");
         spawnEffect("party", "HEAL", "charge");
         appendLog(`${support.name}이(가) ${lowest.name} 회복 +${heal}`);
+        playSfx("heal");
       }
     }
 
@@ -217,6 +257,7 @@ export function BattlePrototype() {
       triggerFlash("party", target.id);
       applyHitStop();
       appendLog(`${enemy.name} 공격 → ${target.name} ${damage} 피해`);
+      playSfx("hit");
     }
 
     nextEnemies = nextEnemies.map((unit) => ({ ...unit }));
@@ -276,8 +317,18 @@ export function BattlePrototype() {
       : "둥지 방어 실패. 배속/가드/포커스 타이밍과 방 선택 효과를 다시 조정해야 합니다."
     : "전투 진행 중. 오토와 배속을 조합해 감각을 확인하세요.";
 
+  const skillButtonStyle = (skill: SkillId): CSSProperties => ({
+    backgroundImage: `linear-gradient(rgba(34,24,44,0.82), rgba(34,24,44,0.82)), url('/assets/ui/jrpg-window-skin-sheet.png')`,
+  });
+
   return (
     <div className="min-h-screen bg-[#120f19] text-[#f8eedc]">
+      <audio ref={bgmRef} src="/assets/audio/prototype-bgm.wav" loop preload="auto" />
+      <audio ref={hitRef} src="/assets/audio/hit.wav" preload="auto" />
+      <audio ref={burstRef} src="/assets/audio/burst.wav" preload="auto" />
+      <audio ref={healRef} src="/assets/audio/heal.wav" preload="auto" />
+      <audio ref={uiRef} src="/assets/audio/ui-confirm.wav" preload="auto" />
+
       <div className="mx-auto flex min-h-screen max-w-7xl flex-col gap-6 px-3 py-3 md:px-4 md:py-4 lg:grid lg:grid-cols-[1.5fr_0.9fr]">
         <section className="relative overflow-hidden rounded-2xl border border-[#7a5f36] bg-[#1d1623] shadow-2xl">
           {scene === "nest" ? (
@@ -292,7 +343,9 @@ export function BattlePrototype() {
             {showCutscene ? (
               <div className="absolute inset-0 z-30 flex items-center justify-center bg-[rgba(5,4,8,0.76)] p-4">
                 <div className="max-w-4xl overflow-hidden rounded-2xl border border-[#8d7148] bg-[#140f1b] shadow-2xl lg:grid lg:grid-cols-[1.1fr_0.9fr]">
-                  <div className="relative min-h-[280px]"><Image src="/assets/events/investigator-event.png" alt="Event cutscene" fill className="object-cover" /></div>
+                  <div className="relative min-h-[280px]">
+                    <Image src={scene === "nest" ? "/assets/events/nest-command-event.png" : "/assets/events/investigator-event.png"} alt="Event cutscene" fill className="object-cover" />
+                  </div>
                   <div className="flex flex-col justify-between gap-4 p-5">
                     <div>
                       <p className="text-xs uppercase tracking-[0.3em] text-[#caa86a]">Secretary Event</p>
@@ -301,7 +354,7 @@ export function BattlePrototype() {
                     </div>
                     <div className="flex items-center justify-between gap-4">
                       <div className="text-xs text-[#d6c4a0]">현재 둥지 핵심 방: {nestRooms.find((room) => room.id === selectedRoom)?.name}</div>
-                      <button onClick={() => setShowCutscene(false)} className="rounded-lg bg-[#8b5b32] px-4 py-2 font-semibold text-white hover:bg-[#a76d3d]">계속</button>
+                      <button onClick={() => { setShowCutscene(false); playSfx("ui"); }} className="rounded-lg bg-[#8b5b32] px-4 py-2 font-semibold text-white hover:bg-[#a76d3d]">계속</button>
                     </div>
                   </div>
                 </div>
@@ -327,7 +380,7 @@ export function BattlePrototype() {
                   <p className="mb-4 text-sm leading-7 text-[#eadcc0]">원작의 둥지 운영 골자를 기준으로, 상위뷰 둥지에서 핵심 방을 고르고 방 효과를 전투에 반영하는 흐름을 검증합니다.</p>
                   <div className="grid gap-3 sm:grid-cols-2">
                     {nestRooms.map((room) => (
-                      <button key={room.id} onClick={() => setSelectedRoom(room.id)} className={`rounded-xl border p-3 text-left transition ${selectedRoom === room.id ? "border-[#f4d08b] bg-[#61461f]" : "border-[#5e4d2e] bg-[#211a29] hover:bg-[#2e2238]"}`}>
+                      <button key={room.id} onClick={() => { setSelectedRoom(room.id); playSfx("ui"); }} className={`rounded-xl border p-3 text-left transition ${selectedRoom === room.id ? "border-[#f4d08b] bg-[#61461f]" : "border-[#5e4d2e] bg-[#211a29] hover:bg-[#2e2238]"}`}>
                         <div className="font-semibold">{room.name}</div>
                         <div className="mt-1 text-xs text-[#d8c7a1]">{room.effect}</div>
                       </button>
@@ -339,6 +392,7 @@ export function BattlePrototype() {
                   <div className="space-y-3 text-sm text-[#ebdfc4]">
                     <p>선택한 둥지 방 효과가 전투에 반영됩니다.</p>
                     <p>Forge: 공격 보너스 / Hatchery: 회복 강화 / Trap Hall: 적 공격 감소 / War Roost: 템포 / Archive: 정보 감각</p>
+                    <button onClick={() => setAudioEnabled((v) => !v)} className="w-full rounded-lg bg-[#355b88] px-4 py-2 font-semibold text-white hover:bg-[#4473ac]">오디오 {audioEnabled ? "끄기" : "켜기"}</button>
                     <button onClick={startBattle} className="w-full rounded-lg bg-[#b13f34] px-4 py-3 font-semibold text-white hover:bg-[#c54c40]">전투 시작</button>
                   </div>
                 </div>
@@ -368,7 +422,7 @@ export function BattlePrototype() {
                     </div>
                     <div className="flex flex-wrap gap-3">
                       <button onClick={resetBattle} className="rounded-lg bg-[#355b88] px-4 py-2 font-semibold text-white hover:bg-[#4473ac]">둥지로 돌아가기</button>
-                      <button onClick={() => { setScene("battle"); setBattleEnded(false); setResult(null); }} className="rounded-lg bg-[#5a4b68] px-4 py-2 font-semibold text-white hover:bg-[#715b82]">결과 화면 닫기</button>
+                      <button onClick={() => { setScene("battle"); setBattleEnded(false); setResult(null); playSfx("ui"); }} className="rounded-lg bg-[#5a4b68] px-4 py-2 font-semibold text-white hover:bg-[#715b82]">결과 화면 닫기</button>
                     </div>
                   </>
                 )}
@@ -388,9 +442,9 @@ export function BattlePrototype() {
                   {(["claw", "ember", "guard", "focus"] as SkillId[]).map((skill) => (
                     <button
                       key={skill}
-                      onClick={() => setSelectedSkill(skill)}
+                      onClick={() => { setSelectedSkill(skill); playSfx("ui"); }}
                       className={`rounded-lg border px-4 py-3 text-sm transition bg-[length:cover] bg-center ${selectedSkill === skill ? "border-[#f4d08b] text-white shadow-[0_0_16px_rgba(244,208,139,0.25)]" : "border-[#6e5b3b] text-[#e9dbbd] hover:bg-[#3a2d43]"}`}
-                      style={{ backgroundImage: `linear-gradient(rgba(34,24,44,0.82), rgba(34,24,44,0.82)), linear-gradient(135deg, var(--tw-gradient-from), var(--tw-gradient-to)), url('/assets/ui/jrpg-window-skin-sheet.png')` } as React.CSSProperties}
+                      style={skillButtonStyle(skill)}
                     >
                       <div className={`mb-2 inline-flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br ${skillLabels[skill].color} text-lg`}>{skillLabels[skill].icon}</div>
                       <div className="font-semibold">{skillLabels[skill].label}</div>
@@ -403,7 +457,7 @@ export function BattlePrototype() {
                   <button onClick={() => runRound(selectedSkill)} disabled={battleEnded || combatPaused} className="rounded-lg bg-[#b13f34] px-4 py-2 font-semibold text-white hover:bg-[#c54c40] disabled:opacity-50">턴 진행</button>
                   <button onClick={() => setAuto((v) => !v)} className="rounded-lg bg-[#355b88] px-4 py-2 font-semibold text-white hover:bg-[#4473ac]">오토 {auto ? "끄기" : "켜기"}</button>
                   <button onClick={() => setSpeed((v) => (v === 1 ? 2 : v === 2 ? 4 : 1))} className="rounded-lg bg-[#4a6b3e] px-4 py-2 font-semibold text-white hover:bg-[#5f8650]">배속 변경 ({speed}x)</button>
-                  <button onClick={() => setShowCutscene(true)} className="rounded-lg bg-[#8b5b32] px-4 py-2 font-semibold text-white hover:bg-[#a76d3d]">컷신 보기</button>
+                  <button onClick={() => { setShowCutscene(true); playSfx("ui"); }} className="rounded-lg bg-[#8b5b32] px-4 py-2 font-semibold text-white hover:bg-[#a76d3d]">컷신 보기</button>
                   <button onClick={resetBattle} className="rounded-lg bg-[#5a4b68] px-4 py-2 font-semibold text-white hover:bg-[#715b82]">전투 리셋</button>
                 </div>
               </div>
@@ -415,7 +469,7 @@ export function BattlePrototype() {
           <div className="overflow-hidden rounded-2xl border border-[#7a5f36] bg-[#1a1420]">
             <div className="border-b border-[#7a5f36] px-4 py-3"><h2 className="text-lg font-bold">Secretary Briefing</h2></div>
             <div className="flex gap-3 p-4">
-              <div className="relative h-36 w-28 shrink-0 overflow-hidden rounded-xl border border-[#8b6f47] md:h-40 md:w-32"><Image src="/assets/characters/secretary-portrait.png" alt="Secretary portrait" fill className="object-cover" /></div>
+              <div className="relative h-36 w-28 shrink-0 overflow-hidden rounded-xl border border-[#8b6f47] md:h-40 md:w-32"><Image src={scene === "battle" ? "/assets/characters/secretary-portrait-serious.png" : "/assets/characters/secretary-portrait.png"} alt="Secretary portrait" fill className="object-cover" /></div>
               <div className="text-sm leading-6 text-[#ebdfc4]">
                 <p className="mb-2">“기준선은 원작의 전투 감각과 둥지 운영 구조입니다. 웹에 맞게 압축하되, 리듬은 그쪽을 따라가겠습니다.”</p>
                 <p>{currentBriefing}</p>
@@ -435,6 +489,7 @@ export function BattlePrototype() {
             <p className="mb-2">현재 화면: {scene === "nest" ? "둥지" : scene === "battle" ? "전투" : "결과"}</p>
             <p className="mb-2">선택된 둥지 방: {nestRooms.find((room) => room.id === selectedRoom)?.name}</p>
             <p className="mb-2">공격 버프: +{attackBuff} / 방어 버프: +{guardBuff}</p>
+            <p className="mb-2">오디오: {audioEnabled ? "ON" : "OFF"}</p>
             <p>{battleEnded ? (result === "Victory" ? "웹 전투 프로토 1차 승리 상태." : "재도전 및 밸런스 조정 필요.") : "전투 진행 중. 오토와 배속을 조합해 감각을 확인하세요."}</p>
           </div>
         </aside>
@@ -451,9 +506,7 @@ function EffectStage({ effects, side }: { effects: EffectLayer[]; side: "party" 
   return (
     <div className={`pointer-events-none absolute inset-y-0 ${side === "party" ? "left-0 right-1/2" : "left-1/2 right-0"}`}>
       {effects.map((effect) => (
-        <div key={effect.id} className={`absolute top-1/2 ${side === "party" ? "left-[38%]" : "right-[38%]"} -translate-y-1/2 text-4xl font-black battle-effect ${effect.style === "burst" ? "text-orange-300" : effect.style === "guard" ? "text-sky-300" : effect.style === "charge" ? "text-violet-300" : "text-amber-200"}`}>
-          {effect.label}
-        </div>
+        <div key={effect.id} className={`absolute top-1/2 ${side === "party" ? "left-[38%]" : "right-[38%]"} -translate-y-1/2 text-4xl font-black battle-effect ${effect.style === "burst" ? "text-orange-300" : effect.style === "guard" ? "text-sky-300" : effect.style === "charge" ? "text-violet-300" : "text-amber-200"}`}>{effect.label}</div>
       ))}
     </div>
   );
