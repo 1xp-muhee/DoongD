@@ -5,6 +5,7 @@ import Image from "next/image";
 import { initialParty, skillLabels, type Fighter, type SkillId, wavePack } from "@/lib/battle-data";
 
 type LogEntry = { id: number; text: string };
+type DamagePopup = { id: number; team: "party" | "enemy"; targetId: string; value: number; kind: "damage" | "heal" };
 
 const cloneFighter = (fighter: Fighter): Fighter => ({ ...fighter });
 const alive = (team: Fighter[]) => team.filter((unit) => unit.hp > 0);
@@ -23,12 +24,41 @@ export function BattlePrototype() {
   const [battleEnded, setBattleEnded] = useState(false);
   const [result, setResult] = useState<string | null>(null);
   const [logId, setLogId] = useState(2);
+  const [popupId, setPopupId] = useState(1);
+  const [popups, setPopups] = useState<DamagePopup[]>([]);
+  const [flashParty, setFlashParty] = useState<string | null>(null);
+  const [flashEnemy, setFlashEnemy] = useState<string | null>(null);
+  const [waveBanner, setWaveBanner] = useState<string>("Wave 1 - Raiders");
 
   const currentWaveLabel = useMemo(() => ["Raiders", "Militia", "Investigators"][waveIndex] ?? "Final", [waveIndex]);
 
   const appendLog = (text: string) => {
     setLogs((prev) => [{ id: logId, text }, ...prev].slice(0, 8));
     setLogId((prev) => prev + 1);
+  };
+
+  const spawnPopup = (team: "party" | "enemy", targetId: string, value: number, kind: "damage" | "heal") => {
+    const id = popupId;
+    setPopupId((prev) => prev + 1);
+    setPopups((prev) => [...prev, { id, team, targetId, value, kind }]);
+    window.setTimeout(() => {
+      setPopups((prev) => prev.filter((popup) => popup.id !== id));
+    }, 650);
+  };
+
+  const triggerFlash = (team: "party" | "enemy", targetId: string) => {
+    if (team === "party") {
+      setFlashParty(targetId);
+      window.setTimeout(() => setFlashParty(null), 180);
+    } else {
+      setFlashEnemy(targetId);
+      window.setTimeout(() => setFlashEnemy(null), 180);
+    }
+  };
+
+  const showWaveBanner = (text: string) => {
+    setWaveBanner(text);
+    window.setTimeout(() => setWaveBanner(""), 1400);
   };
 
   const resetBattle = () => {
@@ -44,6 +74,9 @@ export function BattlePrototype() {
     setBattleEnded(false);
     setResult(null);
     setLogId(2);
+    setPopupId(1);
+    setPopups([]);
+    setWaveBanner("Wave 1 - Raiders");
   };
 
   const calculateDamage = (atk: number, def: number, extra = 0) => Math.max(1, atk + extra - def);
@@ -66,16 +99,21 @@ export function BattlePrototype() {
     if (skill === "guard") {
       nextGuard = 3;
       appendLog("Aegis Drake가 Guard Roar로 진형을 굳혔습니다.");
+      showWaveBanner("Guard Roar");
     } else if (skill === "focus") {
       nextFocus = 3;
       appendLog("Ash Fang가 Focus Breath로 다음 타격을 준비합니다.");
+      showWaveBanner("Focus Breath");
     } else {
       const skillBonus = skill === "ember" ? 6 : 2;
       const target = alive(nextEnemies)[0];
       if (target) {
         const damage = calculateDamage(dealer.atk, target.def, skillBonus + focusBuff);
         target.hp = clamp(target.hp - damage);
+        spawnPopup("enemy", target.id, damage, "damage");
+        triggerFlash("enemy", target.id);
         appendLog(`${dealer.name}의 ${skillLabels[skill].label} → ${target.name} ${damage} 피해`);
+        showWaveBanner(skillLabels[skill].label);
       }
     }
 
@@ -83,6 +121,7 @@ export function BattlePrototype() {
       const lowest = alive(nextParty).sort((a, b) => a.hp / a.maxHp - b.hp / b.maxHp)[0];
       if (lowest && lowest.hp < lowest.maxHp) {
         lowest.hp = Math.min(lowest.maxHp, lowest.hp + 4);
+        spawnPopup("party", lowest.id, 4, "heal");
         appendLog(`${support.name}이(가) ${lowest.name} 회복 +4`);
       }
     }
@@ -92,6 +131,8 @@ export function BattlePrototype() {
       if (!target) break;
       const damage = calculateDamage(enemy.atk, target.def, -nextGuard);
       target.hp = clamp(target.hp - damage);
+      spawnPopup("party", target.id, damage, "damage");
+      triggerFlash("party", target.id);
       appendLog(`${enemy.name} 공격 → ${target.name} ${damage} 피해`);
     }
 
@@ -108,6 +149,7 @@ export function BattlePrototype() {
         setBattleEnded(true);
         setResult("Victory");
         appendLog("모든 웨이브를 막아냈습니다.");
+        showWaveBanner("Final Victory");
         return;
       }
 
@@ -118,6 +160,7 @@ export function BattlePrototype() {
       setGuardBuff(nextGuard);
       setFocusBuff(nextFocus);
       appendLog(`다음 웨이브: ${["Raiders", "Militia", "Investigators"][nextWaveIndex]}`);
+      showWaveBanner(`Wave ${nextWaveIndex + 1} - ${["Raiders", "Militia", "Investigators"][nextWaveIndex]}`);
       return;
     }
 
@@ -127,6 +170,7 @@ export function BattlePrototype() {
       setBattleEnded(true);
       setResult("Defeat");
       appendLog("둥지 방어에 실패했습니다.");
+      showWaveBanner("Defeat");
       return;
     }
 
@@ -149,6 +193,12 @@ export function BattlePrototype() {
         <section className="relative overflow-hidden rounded-2xl border border-[#7a5f36] bg-[#1d1623] shadow-2xl">
           <Image src="/assets/backgrounds/battle-background.png" alt="Battle background" fill className="object-cover opacity-50" priority />
           <div className="relative z-10 flex min-h-[620px] flex-col justify-between p-6">
+            {waveBanner ? (
+              <div className="pointer-events-none absolute left-1/2 top-24 z-20 -translate-x-1/2 rounded-full border border-[#d8b16c] bg-[rgba(24,16,28,0.92)] px-6 py-2 text-lg font-bold text-[#f7d58a] battle-banner">
+                {waveBanner}
+              </div>
+            ) : null}
+
             <header className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-[#9a7a46] bg-[rgba(16,12,22,0.8)] px-4 py-3 backdrop-blur-sm">
               <div>
                 <p className="text-xs uppercase tracking-[0.3em] text-[#caa86a]">DoongD Web Battle Prototype</p>
@@ -162,8 +212,8 @@ export function BattlePrototype() {
             </header>
 
             <div className="grid grid-cols-2 gap-6">
-              <TeamPanel title="Nest Defenders" team={party} accent="emerald" />
-              <TeamPanel title="Invaders" team={enemies} accent="rose" reverse />
+              <TeamPanel title="Nest Defenders" team={party} accent="emerald" popups={popups.filter((p) => p.team === "party")} flashedId={flashParty} />
+              <TeamPanel title="Invaders" team={enemies} accent="rose" reverse popups={popups.filter((p) => p.team === "enemy")} flashedId={flashEnemy} />
             </div>
 
             <div className="rounded-xl border border-[#9a7a46] bg-[rgba(12,10,18,0.82)] p-4 backdrop-blur-sm">
@@ -172,7 +222,7 @@ export function BattlePrototype() {
                   <button
                     key={skill}
                     onClick={() => setSelectedSkill(skill)}
-                    className={`rounded-lg border px-4 py-2 text-sm transition ${selectedSkill === skill ? "border-[#f4d08b] bg-[#6e4d1f] text-white" : "border-[#6e5b3b] bg-[#2a2231] text-[#e9dbbd] hover:bg-[#3a2d43]"}`}
+                    className={`rounded-lg border px-4 py-2 text-sm transition ${selectedSkill === skill ? "border-[#f4d08b] bg-[#6e4d1f] text-white shadow-[0_0_16px_rgba(244,208,139,0.25)]" : "border-[#6e5b3b] bg-[#2a2231] text-[#e9dbbd] hover:bg-[#3a2d43]"}`}
                   >
                     <div className="font-semibold">{skillLabels[skill].label}</div>
                     <div className="text-xs opacity-80">{skillLabels[skill].desc}</div>
@@ -232,15 +282,39 @@ export function BattlePrototype() {
   );
 }
 
-function TeamPanel({ title, team, accent, reverse = false }: { title: string; team: Fighter[]; accent: "emerald" | "rose"; reverse?: boolean }) {
+function TeamPanel({
+  title,
+  team,
+  accent,
+  reverse = false,
+  popups,
+  flashedId,
+}: {
+  title: string;
+  team: Fighter[];
+  accent: "emerald" | "rose";
+  reverse?: boolean;
+  popups: DamagePopup[];
+  flashedId: string | null;
+}) {
   return (
     <div className="rounded-xl border border-[#9a7a46] bg-[rgba(10,8,15,0.72)] p-4 backdrop-blur-sm">
       <h2 className="mb-3 text-lg font-bold">{title}</h2>
       <div className="space-y-3">
         {team.map((fighter) => {
           const percent = Math.max(0, (fighter.hp / fighter.maxHp) * 100);
+          const unitPopups = popups.filter((popup) => popup.targetId === fighter.id);
+          const isFlashed = flashedId === fighter.id;
           return (
-            <div key={fighter.id} className={`rounded-xl border border-[#5e4d2e] bg-[#211a29] p-3 ${reverse ? "text-right" : ""}`}>
+            <div key={fighter.id} className={`relative rounded-xl border border-[#5e4d2e] bg-[#211a29] p-3 transition ${reverse ? "text-right" : ""} ${isFlashed ? "battle-hit-flash" : ""}`}>
+              {unitPopups.map((popup) => (
+                <div
+                  key={popup.id}
+                  className={`pointer-events-none absolute left-1/2 top-0 -translate-x-1/2 text-xl font-bold battle-popup ${popup.kind === "heal" ? "text-emerald-300" : "text-rose-300"}`}
+                >
+                  {popup.kind === "heal" ? `+${popup.value}` : `-${popup.value}`}
+                </div>
+              ))}
               <div className="mb-1 flex items-center justify-between gap-3">
                 <div>
                   <div className="font-semibold text-[#f8edd5]">{fighter.name}</div>
@@ -249,7 +323,7 @@ function TeamPanel({ title, team, accent, reverse = false }: { title: string; te
                 <div className="text-sm text-[#e6d6b1]">{fighter.hp}/{fighter.maxHp}</div>
               </div>
               <div className="h-3 overflow-hidden rounded-full bg-[#3a2f44]">
-                <div className={`h-full rounded-full ${accent === "emerald" ? "bg-emerald-500" : "bg-rose-500"}`} style={{ width: `${percent}%` }} />
+                <div className={`h-full rounded-full transition-all duration-300 ${accent === "emerald" ? "bg-emerald-500" : "bg-rose-500"}`} style={{ width: `${percent}%` }} />
               </div>
               <div className="mt-2 text-xs text-[#cdb88b]">ATK {fighter.atk} · DEF {fighter.def} · SPD {fighter.speed}</div>
             </div>
