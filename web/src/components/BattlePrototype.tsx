@@ -3,10 +3,12 @@
 import { useEffect, useMemo, useState } from "react";
 import Image from "next/image";
 import { initialParty, skillLabels, type Fighter, type SkillId, wavePack } from "@/lib/battle-data";
-import { briefingLines, nestRooms, type AppScene } from "@/lib/app-data";
+import { briefingLines, nestRooms, waveChoices, type AppScene, type WaveChoiceId } from "@/lib/app-data";
 
 type LogEntry = { id: number; text: string };
 type DamagePopup = { id: number; team: "party" | "enemy"; targetId: string; value: number; kind: "damage" | "heal" };
+type EffectLayer = { id: number; team: "party" | "enemy"; label: string; style: "slash" | "burst" | "guard" | "charge" };
+type RewardState = { gold: number; essence: number; score: number };
 
 type RoundResult = { result: string | null; victory: boolean };
 
@@ -25,17 +27,21 @@ export function BattlePrototype() {
   const [speed, setSpeed] = useState(1);
   const [guardBuff, setGuardBuff] = useState(0);
   const [focusBuff, setFocusBuff] = useState(0);
+  const [attackBuff, setAttackBuff] = useState(0);
   const [battleEnded, setBattleEnded] = useState(false);
   const [result, setResult] = useState<string | null>(null);
+  const [rewardState, setRewardState] = useState<RewardState>({ gold: 0, essence: 0, score: 0 });
   const [logId, setLogId] = useState(2);
   const [popupId, setPopupId] = useState(1);
   const [popups, setPopups] = useState<DamagePopup[]>([]);
+  const [effectLayers, setEffectLayers] = useState<EffectLayer[]>([]);
   const [flashParty, setFlashParty] = useState<string | null>(null);
   const [flashEnemy, setFlashEnemy] = useState<string | null>(null);
   const [waveBanner, setWaveBanner] = useState<string>("Wave 1 - Raiders");
   const [combatPaused, setCombatPaused] = useState(false);
   const [showCutscene, setShowCutscene] = useState(true);
   const [selectedRoom, setSelectedRoom] = useState("forge");
+  const [pendingWaveChoice, setPendingWaveChoice] = useState(false);
 
   const currentWaveLabel = useMemo(() => ["Raiders", "Militia", "Investigators"][waveIndex] ?? "Final", [waveIndex]);
   const currentBriefing = briefingLines[Math.min(waveIndex, briefingLines.length - 1)];
@@ -50,6 +56,12 @@ export function BattlePrototype() {
     setPopupId((prev) => prev + 1);
     setPopups((prev) => [...prev, { id, team, targetId, value, kind }]);
     window.setTimeout(() => setPopups((prev) => prev.filter((popup) => popup.id !== id)), 650);
+  };
+
+  const spawnEffect = (team: "party" | "enemy", label: string, style: EffectLayer["style"]) => {
+    const id = Date.now() + Math.random();
+    setEffectLayers((prev) => [...prev, { id, team, label, style }]);
+    window.setTimeout(() => setEffectLayers((prev) => prev.filter((effect) => effect.id !== id)), 520);
   };
 
   const triggerFlash = (team: "party" | "enemy", targetId: string) => {
@@ -83,13 +95,17 @@ export function BattlePrototype() {
     setSpeed(1);
     setGuardBuff(0);
     setFocusBuff(0);
+    setAttackBuff(0);
     setBattleEnded(false);
     setResult(null);
+    setRewardState({ gold: 0, essence: 0, score: 0 });
     setLogId(2);
     setPopupId(1);
     setPopups([]);
+    setEffectLayers([]);
     setWaveBanner("Wave 1 - Raiders");
     setShowCutscene(true);
+    setPendingWaveChoice(false);
   };
 
   const calculateDamage = (atk: number, def: number, extra = 0) => Math.max(1, atk + extra - def);
@@ -104,16 +120,46 @@ export function BattlePrototype() {
   const finalizeRoundResult = ({ result, victory }: RoundResult) => {
     setBattleEnded(true);
     setResult(result);
+    const rewardGold = victory ? 40 + waveIndex * 20 : 12;
+    const rewardEssence = victory ? 3 + waveIndex : 1;
+    const rewardScore = alive(party).length * 120 + (victory ? 300 : 80) + waveIndex * 100;
+    setRewardState({ gold: rewardGold, essence: rewardEssence, score: rewardScore });
     setScene("result");
-    appendLog(victory ? "전 웨이브 방어 성공." : "둥지 방어 실패. 전략 수정 필요.");
+    appendLog(victory ? `전 웨이브 방어 성공. 보상: Gold ${rewardGold}, Essence ${rewardEssence}` : "둥지 방어 실패. 전략 수정 필요.");
+  };
+
+  const applyWaveChoice = (choiceId: WaveChoiceId) => {
+    if (!pendingWaveChoice) return;
+
+    const nextParty = party.map(cloneFighter);
+    if (choiceId === "heal-party") {
+      nextParty.forEach((unit) => {
+        if (unit.hp > 0) unit.hp = Math.min(unit.maxHp, unit.hp + 6);
+      });
+      appendLog("재정비 선택: 아군 전원 HP +6");
+      showWaveBanner("Reorganize");
+    } else if (choiceId === "sharpen-claws") {
+      setAttackBuff(2);
+      appendLog("공세 준비 선택: 다음 웨이브 아군 공격 +2");
+      showWaveBanner("Sharpen Claws");
+    } else if (choiceId === "reinforce-guard") {
+      setGuardBuff(2);
+      appendLog("방어 보강 선택: 다음 웨이브 피해 감소 +2");
+      showWaveBanner("Reinforce Guard");
+    }
+
+    setParty(nextParty);
+    setPendingWaveChoice(false);
+    setScene("battle");
+    setShowCutscene(true);
   };
 
   const runRound = (skill: SkillId) => {
-    if (battleEnded || scene !== "battle") return;
+    if (battleEnded || scene !== "battle" || pendingWaveChoice) return;
 
     let nextParty = party.map(cloneFighter);
     let nextEnemies = enemies.map(cloneFighter);
-    let nextGuard = 0;
+    let nextGuard = guardBuff > 0 ? guardBuff : 0;
     let nextFocus = 0;
 
     const frontAlly = alive(nextParty)[0];
@@ -124,20 +170,23 @@ export function BattlePrototype() {
     const support = alive(nextParty).find((unit) => unit.role === "Support");
 
     if (skill === "guard") {
-      nextGuard = 3;
+      nextGuard += 3;
+      spawnEffect("party", "GUARD", "guard");
       appendLog("Aegis Drake가 Guard Roar로 진형을 굳혔습니다.");
       showWaveBanner("Guard Roar");
     } else if (skill === "focus") {
       nextFocus = 3;
+      spawnEffect("party", "FOCUS", "charge");
       appendLog("Ash Fang가 Focus Breath로 다음 타격을 준비합니다.");
       showWaveBanner("Focus Breath");
     } else {
       const skillBonus = skill === "ember" ? 6 : 2;
       const target = alive(nextEnemies)[0];
       if (target) {
-        const damage = calculateDamage(dealer.atk, target.def, skillBonus + focusBuff + (selectedRoom === "forge" ? 1 : 0));
+        const damage = calculateDamage(dealer.atk, target.def, skillBonus + focusBuff + attackBuff + (selectedRoom === "forge" ? 1 : 0));
         target.hp = clamp(target.hp - damage);
         spawnPopup("enemy", target.id, damage, "damage");
+        spawnEffect("enemy", skillLabels[skill].label, skill === "ember" ? "burst" : "slash");
         triggerFlash("enemy", target.id);
         applyHitStop();
         appendLog(`${dealer.name}의 ${skillLabels[skill].label} → ${target.name} ${damage} 피해`);
@@ -152,6 +201,7 @@ export function BattlePrototype() {
         const heal = 4 + healBonus;
         lowest.hp = Math.min(lowest.maxHp, lowest.hp + heal);
         spawnPopup("party", lowest.id, heal, "heal");
+        spawnEffect("party", "HEAL", "charge");
         appendLog(`${support.name}이(가) ${lowest.name} 회복 +${heal}`);
       }
     }
@@ -163,6 +213,7 @@ export function BattlePrototype() {
       const damage = calculateDamage(enemy.atk - trapPenalty, target.def, -nextGuard);
       target.hp = clamp(target.hp - damage);
       spawnPopup("party", target.id, damage, "damage");
+      spawnEffect("party", "HIT", "slash");
       triggerFlash("party", target.id);
       applyHitStop();
       appendLog(`${enemy.name} 공격 → ${target.name} ${damage} 피해`);
@@ -178,6 +229,7 @@ export function BattlePrototype() {
       if (waveIndex + 1 >= wavePack.length) {
         setParty(nextParty);
         setEnemies(nextEnemies);
+        setAttackBuff(0);
         showWaveBanner("Final Victory");
         finalizeRoundResult({ result: "Victory", victory: true });
         return;
@@ -189,8 +241,10 @@ export function BattlePrototype() {
       setEnemies(wavePack[nextWaveIndex].map(cloneFighter));
       setGuardBuff(nextGuard);
       setFocusBuff(nextFocus);
-      appendLog(`다음 웨이브: ${["Raiders", "Militia", "Investigators"][nextWaveIndex]}`);
-      showWaveBanner(`Wave ${nextWaveIndex + 1} - ${["Raiders", "Militia", "Investigators"][nextWaveIndex]}`);
+      setPendingWaveChoice(true);
+      setScene("result");
+      appendLog(`웨이브 ${nextWaveIndex} 진입 전 선택지를 고르세요.`);
+      showWaveBanner(`Wave ${nextWaveIndex + 1} Prep`);
       return;
     }
 
@@ -204,16 +258,23 @@ export function BattlePrototype() {
 
     setParty(nextParty);
     setEnemies(nextEnemies);
-    setGuardBuff(nextGuard);
+    setGuardBuff(nextGuard > 0 ? Math.max(0, nextGuard - 1) : 0);
     setFocusBuff(nextFocus);
+    if (attackBuff > 0) setAttackBuff(Math.max(0, attackBuff - 1));
   };
 
   useEffect(() => {
-    if (!auto || battleEnded || scene !== "battle" || combatPaused) return;
+    if (!auto || battleEnded || scene !== "battle" || combatPaused || pendingWaveChoice) return;
     const delay = speed === 1 ? 1200 : speed === 2 ? 700 : 350;
     const id = window.setTimeout(() => runRound(selectedSkill), delay);
     return () => window.clearTimeout(id);
-  }, [auto, battleEnded, selectedSkill, speed, party, enemies, scene, combatPaused]);
+  }, [auto, battleEnded, selectedSkill, speed, party, enemies, scene, combatPaused, pendingWaveChoice]);
+
+  const resultText = battleEnded
+    ? result === "Victory"
+      ? "모든 웨이브 방어 성공. 둥지 운영과 전투 흐름이 하나의 루프로 연결되었습니다."
+      : "둥지 방어 실패. 배속/가드/포커스 타이밍과 방 선택 효과를 다시 조정해야 합니다."
+    : "전투 진행 중. 오토와 배속을 조합해 감각을 확인하세요.";
 
   return (
     <div className="min-h-screen bg-[#120f19] text-[#f8eedc]">
@@ -226,18 +287,12 @@ export function BattlePrototype() {
           )}
           <div className="absolute inset-0 bg-[linear-gradient(to_bottom,rgba(8,6,12,0.35),rgba(8,6,12,0.78))]" />
           <div className="relative z-10 flex min-h-[720px] flex-col justify-between p-4 md:p-6">
-            {waveBanner ? (
-              <div className="pointer-events-none absolute left-1/2 top-20 z-20 -translate-x-1/2 rounded-full border border-[#d8b16c] bg-[rgba(24,16,28,0.92)] px-5 py-2 text-sm font-bold text-[#f7d58a] md:text-lg battle-banner">
-                {waveBanner}
-              </div>
-            ) : null}
+            {waveBanner ? <div className="pointer-events-none absolute left-1/2 top-20 z-20 -translate-x-1/2 rounded-full border border-[#d8b16c] bg-[rgba(24,16,28,0.92)] px-5 py-2 text-sm font-bold text-[#f7d58a] md:text-lg battle-banner">{waveBanner}</div> : null}
 
             {showCutscene ? (
               <div className="absolute inset-0 z-30 flex items-center justify-center bg-[rgba(5,4,8,0.76)] p-4">
                 <div className="max-w-4xl overflow-hidden rounded-2xl border border-[#8d7148] bg-[#140f1b] shadow-2xl lg:grid lg:grid-cols-[1.1fr_0.9fr]">
-                  <div className="relative min-h-[280px]">
-                    <Image src="/assets/events/investigator-event.png" alt="Event cutscene" fill className="object-cover" />
-                  </div>
+                  <div className="relative min-h-[280px]"><Image src="/assets/events/investigator-event.png" alt="Event cutscene" fill className="object-cover" /></div>
                   <div className="flex flex-col justify-between gap-4 p-5">
                     <div>
                       <p className="text-xs uppercase tracking-[0.3em] text-[#caa86a]">Secretary Event</p>
@@ -269,7 +324,7 @@ export function BattlePrototype() {
               <div className="grid gap-4 lg:grid-cols-[1.2fr_0.8fr]">
                 <div className="rounded-xl border border-[#9a7a46] bg-[rgba(10,8,15,0.72)] p-4 backdrop-blur-sm">
                   <h2 className="mb-3 text-lg font-bold">Nest Overview</h2>
-                  <p className="mb-4 text-sm leading-7 text-[#eadcc0]">Dungeon Keeper Mobile처럼 둥지 상위뷰에서 핵심 방을 고르고, 이후 방 효과를 전투에 반영하는 흐름을 검증합니다.</p>
+                  <p className="mb-4 text-sm leading-7 text-[#eadcc0]">원작의 둥지 운영 골자를 기준으로, 상위뷰 둥지에서 핵심 방을 고르고 방 효과를 전투에 반영하는 흐름을 검증합니다.</p>
                   <div className="grid gap-3 sm:grid-cols-2">
                     {nestRooms.map((room) => (
                       <button key={room.id} onClick={() => setSelectedRoom(room.id)} className={`rounded-xl border p-3 text-left transition ${selectedRoom === room.id ? "border-[#f4d08b] bg-[#61461f]" : "border-[#5e4d2e] bg-[#211a29] hover:bg-[#2e2238]"}`}>
@@ -283,24 +338,45 @@ export function BattlePrototype() {
                   <h2 className="mb-3 text-lg font-bold">Action</h2>
                   <div className="space-y-3 text-sm text-[#ebdfc4]">
                     <p>선택한 둥지 방 효과가 전투에 반영됩니다.</p>
-                    <p>Forge: 공격 보너스 / Hatchery: 회복 강화 / Trap Hall: 적 공격 감소</p>
+                    <p>Forge: 공격 보너스 / Hatchery: 회복 강화 / Trap Hall: 적 공격 감소 / War Roost: 템포 / Archive: 정보 감각</p>
                     <button onClick={startBattle} className="w-full rounded-lg bg-[#b13f34] px-4 py-3 font-semibold text-white hover:bg-[#c54c40]">전투 시작</button>
                   </div>
                 </div>
               </div>
             ) : scene === "result" ? (
               <div className="rounded-xl border border-[#9a7a46] bg-[rgba(10,8,15,0.74)] p-6 backdrop-blur-sm">
-                <h2 className="mb-3 text-3xl font-bold text-[#f5c56f]">{result}</h2>
-                <p className="mb-4 text-sm leading-7 text-[#eadcc0]">
-                  {result === "Victory" ? "모든 웨이브 방어 성공. 둥지 운영과 전투 흐름이 하나의 루프로 연결되었습니다." : "둥지 방어 실패. 배속/가드/포커스 타이밍과 방 선택 효과를 다시 조정해야 합니다."}
-                </p>
-                <div className="flex flex-wrap gap-3">
-                  <button onClick={resetBattle} className="rounded-lg bg-[#355b88] px-4 py-2 font-semibold text-white hover:bg-[#4473ac]">둥지로 돌아가기</button>
-                  <button onClick={() => { setScene("battle"); setBattleEnded(false); setResult(null); }} className="rounded-lg bg-[#5a4b68] px-4 py-2 font-semibold text-white hover:bg-[#715b82]">결과 화면 닫기</button>
-                </div>
+                <h2 className="mb-3 text-3xl font-bold text-[#f5c56f]">{pendingWaveChoice ? `Wave ${waveIndex + 1} 선택` : result}</h2>
+                {pendingWaveChoice ? (
+                  <div>
+                    <p className="mb-4 text-sm leading-7 text-[#eadcc0]">원작의 웨이브 사이 선택 구조를 참고해, 다음 전투 전 짧은 운영 결정을 넣었습니다.</p>
+                    <div className="grid gap-3 md:grid-cols-3">
+                      {waveChoices.map((choice) => (
+                        <button key={choice.id} onClick={() => applyWaveChoice(choice.id)} className="rounded-xl border border-[#7f6540] bg-[#211a29] p-4 text-left hover:bg-[#32243a]">
+                          <div className="font-semibold text-[#f4d08b]">{choice.name}</div>
+                          <div className="mt-1 text-xs text-[#d8c7a1]">{choice.desc}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                ) : (
+                  <>
+                    <p className="mb-4 text-sm leading-7 text-[#eadcc0]">{resultText}</p>
+                    <div className="mb-4 grid gap-3 sm:grid-cols-3">
+                      <RewardCard label="Gold" value={rewardState.gold} />
+                      <RewardCard label="Essence" value={rewardState.essence} />
+                      <RewardCard label="Score" value={rewardState.score} />
+                    </div>
+                    <div className="flex flex-wrap gap-3">
+                      <button onClick={resetBattle} className="rounded-lg bg-[#355b88] px-4 py-2 font-semibold text-white hover:bg-[#4473ac]">둥지로 돌아가기</button>
+                      <button onClick={() => { setScene("battle"); setBattleEnded(false); setResult(null); }} className="rounded-lg bg-[#5a4b68] px-4 py-2 font-semibold text-white hover:bg-[#715b82]">결과 화면 닫기</button>
+                    </div>
+                  </>
+                )}
               </div>
             ) : (
-              <div className={`grid grid-cols-1 gap-6 lg:grid-cols-2 transition-transform duration-75 ${combatPaused ? "scale-[0.996]" : "scale-100"}`}>
+              <div className={`relative grid grid-cols-1 gap-6 lg:grid-cols-2 transition-transform duration-75 ${combatPaused ? "scale-[0.996]" : "scale-100"}`}>
+                <EffectStage effects={effectLayers.filter((effect) => effect.team === "party")} side="party" />
+                <EffectStage effects={effectLayers.filter((effect) => effect.team === "enemy")} side="enemy" />
                 <TeamPanel title="Nest Defenders" team={party} accent="emerald" popups={popups.filter((p) => p.team === "party")} flashedId={flashParty} />
                 <TeamPanel title="Invaders" team={enemies} accent="rose" reverse popups={popups.filter((p) => p.team === "enemy")} flashedId={flashEnemy} />
               </div>
@@ -313,9 +389,10 @@ export function BattlePrototype() {
                     <button
                       key={skill}
                       onClick={() => setSelectedSkill(skill)}
-                      className={`rounded-lg border px-4 py-2 text-sm transition bg-[length:cover] bg-center ${selectedSkill === skill ? "border-[#f4d08b] bg-[#6e4d1f] text-white shadow-[0_0_16px_rgba(244,208,139,0.25)]" : "border-[#6e5b3b] bg-[#2a2231] text-[#e9dbbd] hover:bg-[#3a2d43]"}`}
-                      style={{ backgroundImage: "linear-gradient(rgba(34,24,44,0.82), rgba(34,24,44,0.82)), url('/assets/ui/jrpg-window-skin-sheet.png')" }}
+                      className={`rounded-lg border px-4 py-3 text-sm transition bg-[length:cover] bg-center ${selectedSkill === skill ? "border-[#f4d08b] text-white shadow-[0_0_16px_rgba(244,208,139,0.25)]" : "border-[#6e5b3b] text-[#e9dbbd] hover:bg-[#3a2d43]"}`}
+                      style={{ backgroundImage: `linear-gradient(rgba(34,24,44,0.82), rgba(34,24,44,0.82)), linear-gradient(135deg, var(--tw-gradient-from), var(--tw-gradient-to)), url('/assets/ui/jrpg-window-skin-sheet.png')` } as React.CSSProperties}
                     >
+                      <div className={`mb-2 inline-flex h-8 w-8 items-center justify-center rounded-full bg-gradient-to-br ${skillLabels[skill].color} text-lg`}>{skillLabels[skill].icon}</div>
                       <div className="font-semibold">{skillLabels[skill].label}</div>
                       <div className="text-xs opacity-80">{skillLabels[skill].desc}</div>
                     </button>
@@ -336,15 +413,11 @@ export function BattlePrototype() {
 
         <aside className="flex flex-col gap-4">
           <div className="overflow-hidden rounded-2xl border border-[#7a5f36] bg-[#1a1420]">
-            <div className="border-b border-[#7a5f36] px-4 py-3">
-              <h2 className="text-lg font-bold">Secretary Briefing</h2>
-            </div>
+            <div className="border-b border-[#7a5f36] px-4 py-3"><h2 className="text-lg font-bold">Secretary Briefing</h2></div>
             <div className="flex gap-3 p-4">
-              <div className="relative h-36 w-28 shrink-0 overflow-hidden rounded-xl border border-[#8b6f47] md:h-40 md:w-32">
-                <Image src="/assets/characters/secretary-portrait.png" alt="Secretary portrait" fill className="object-cover" />
-              </div>
+              <div className="relative h-36 w-28 shrink-0 overflow-hidden rounded-xl border border-[#8b6f47] md:h-40 md:w-32"><Image src="/assets/characters/secretary-portrait.png" alt="Secretary portrait" fill className="object-cover" /></div>
               <div className="text-sm leading-6 text-[#ebdfc4]">
-                <p className="mb-2">“이번 웹 프로토는 둥지 방어 전투의 손맛과 배속 시뮬레이션을 빠르게 검증하기 위한 전투 전용 빌드입니다.”</p>
+                <p className="mb-2">“기준선은 원작의 전투 감각과 둥지 운영 구조입니다. 웹에 맞게 압축하되, 리듬은 그쪽을 따라가겠습니다.”</p>
                 <p>{currentBriefing}</p>
               </div>
             </div>
@@ -353,9 +426,7 @@ export function BattlePrototype() {
           <div className="rounded-2xl border border-[#7a5f36] bg-[#1a1420] p-4">
             <h2 className="mb-3 text-lg font-bold">Battle Log</h2>
             <div className="space-y-2 text-sm text-[#f2e8cf]">
-              {logs.map((entry) => (
-                <div key={entry.id} className="rounded-lg bg-[#241b2d] px-3 py-2">{entry.text}</div>
-              ))}
+              {logs.map((entry) => <div key={entry.id} className="rounded-lg bg-[#241b2d] px-3 py-2">{entry.text}</div>)}
             </div>
           </div>
 
@@ -363,6 +434,7 @@ export function BattlePrototype() {
             <h2 className="mb-2 text-lg font-bold">Status</h2>
             <p className="mb-2">현재 화면: {scene === "nest" ? "둥지" : scene === "battle" ? "전투" : "결과"}</p>
             <p className="mb-2">선택된 둥지 방: {nestRooms.find((room) => room.id === selectedRoom)?.name}</p>
+            <p className="mb-2">공격 버프: +{attackBuff} / 방어 버프: +{guardBuff}</p>
             <p>{battleEnded ? (result === "Victory" ? "웹 전투 프로토 1차 승리 상태." : "재도전 및 밸런스 조정 필요.") : "전투 진행 중. 오토와 배속을 조합해 감각을 확인하세요."}</p>
           </div>
         </aside>
@@ -371,21 +443,23 @@ export function BattlePrototype() {
   );
 }
 
-function TeamPanel({
-  title,
-  team,
-  accent,
-  reverse = false,
-  popups,
-  flashedId,
-}: {
-  title: string;
-  team: Fighter[];
-  accent: "emerald" | "rose";
-  reverse?: boolean;
-  popups: DamagePopup[];
-  flashedId: string | null;
-}) {
+function RewardCard({ label, value }: { label: string; value: number }) {
+  return <div className="rounded-xl border border-[#7f6540] bg-[#1d1724] p-4"><div className="text-xs uppercase tracking-[0.25em] text-[#d8b16a]">{label}</div><div className="mt-2 text-2xl font-bold text-[#f6e3b3]">{value}</div></div>;
+}
+
+function EffectStage({ effects, side }: { effects: EffectLayer[]; side: "party" | "enemy" }) {
+  return (
+    <div className={`pointer-events-none absolute inset-y-0 ${side === "party" ? "left-0 right-1/2" : "left-1/2 right-0"}`}>
+      {effects.map((effect) => (
+        <div key={effect.id} className={`absolute top-1/2 ${side === "party" ? "left-[38%]" : "right-[38%]"} -translate-y-1/2 text-4xl font-black battle-effect ${effect.style === "burst" ? "text-orange-300" : effect.style === "guard" ? "text-sky-300" : effect.style === "charge" ? "text-violet-300" : "text-amber-200"}`}>
+          {effect.label}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function TeamPanel({ title, team, accent, reverse = false, popups, flashedId }: { title: string; team: Fighter[]; accent: "emerald" | "rose"; reverse?: boolean; popups: DamagePopup[]; flashedId: string | null }) {
   return (
     <div className="rounded-xl border border-[#9a7a46] bg-[rgba(10,8,15,0.72)] p-4 backdrop-blur-sm">
       <h2 className="mb-3 text-lg font-bold">{title}</h2>
@@ -397,14 +471,7 @@ function TeamPanel({
           const isDead = fighter.hp <= 0;
           return (
             <div key={fighter.id} className={`relative rounded-xl border border-[#5e4d2e] bg-[#211a29] p-3 transition ${reverse ? "text-right" : ""} ${isFlashed ? "battle-hit-flash" : ""} ${isDead ? "opacity-40 saturate-0" : ""}`}>
-              {unitPopups.map((popup) => (
-                <div
-                  key={popup.id}
-                  className={`pointer-events-none absolute left-1/2 top-0 -translate-x-1/2 text-xl font-bold battle-popup ${popup.kind === "heal" ? "text-emerald-300" : "text-rose-300"}`}
-                >
-                  {popup.kind === "heal" ? `+${popup.value}` : `-${popup.value}`}
-                </div>
-              ))}
+              {unitPopups.map((popup) => <div key={popup.id} className={`pointer-events-none absolute left-1/2 top-0 -translate-x-1/2 text-xl font-bold battle-popup ${popup.kind === "heal" ? "text-emerald-300" : "text-rose-300"}`}>{popup.kind === "heal" ? `+${popup.value}` : `-${popup.value}`}</div>)}
               <div className={`mb-1 flex items-center justify-between gap-3 transition-transform duration-100 ${isFlashed ? (reverse ? "-translate-x-1" : "translate-x-1") : "translate-x-0"}`}>
                 <div>
                   <div className="font-semibold text-[#f8edd5]">{fighter.name}</div>
@@ -412,9 +479,7 @@ function TeamPanel({
                 </div>
                 <div className="text-sm text-[#e6d6b1]">{fighter.hp}/{fighter.maxHp}</div>
               </div>
-              <div className="h-3 overflow-hidden rounded-full bg-[#3a2f44]">
-                <div className={`h-full rounded-full transition-all duration-300 ${accent === "emerald" ? "bg-emerald-500" : "bg-rose-500"}`} style={{ width: `${percent}%` }} />
-              </div>
+              <div className="h-3 overflow-hidden rounded-full bg-[#3a2f44]"><div className={`h-full rounded-full transition-all duration-300 ${accent === "emerald" ? "bg-emerald-500" : "bg-rose-500"}`} style={{ width: `${percent}%` }} /></div>
               <div className="mt-2 text-xs text-[#cdb88b]">ATK {fighter.atk} · DEF {fighter.def} · SPD {fighter.speed}</div>
             </div>
           );

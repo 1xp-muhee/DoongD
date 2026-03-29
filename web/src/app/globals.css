@@ -44,43 +44,30 @@ button:disabled {
   animation: battle-banner-pop 0.35s ease-out;
 }
 
+.battle-effect {
+  animation: battle-effect-burst 0.52s ease-out forwards;
+  text-shadow: 0 0 20px rgba(0, 0, 0, 0.55);
+}
+
 @keyframes battle-popup-rise {
-  0% {
-    opacity: 0;
-    transform: translate(-50%, 6px) scale(0.9);
-  }
-  20% {
-    opacity: 1;
-    transform: translate(-50%, -6px) scale(1.08);
-  }
-  100% {
-    opacity: 0;
-    transform: translate(-50%, -30px) scale(1);
-  }
+  0% { opacity: 0; transform: translate(-50%, 6px) scale(0.9); }
+  20% { opacity: 1; transform: translate(-50%, -6px) scale(1.08); }
+  100% { opacity: 0; transform: translate(-50%, -30px) scale(1); }
 }
 
 @keyframes battle-hit-flash {
-  0% {
-    box-shadow: 0 0 0 rgba(255,255,255,0);
-    filter: brightness(1);
-  }
-  40% {
-    box-shadow: 0 0 28px rgba(255, 232, 160, 0.45);
-    filter: brightness(1.28);
-  }
-  100% {
-    box-shadow: 0 0 0 rgba(255,255,255,0);
-    filter: brightness(1);
-  }
+  0% { box-shadow: 0 0 0 rgba(255,255,255,0); filter: brightness(1); }
+  40% { box-shadow: 0 0 28px rgba(255, 232, 160, 0.45); filter: brightness(1.28); }
+  100% { box-shadow: 0 0 0 rgba(255,255,255,0); filter: brightness(1); }
 }
 
 @keyframes battle-banner-pop {
-  0% {
-    opacity: 0;
-    transform: translateX(-50%) translateY(-6px) scale(0.92);
-  }
-  100% {
-    opacity: 1;
-    transform: translateX(-50%) translateY(0) scale(1);
-  }
+  0% { opacity: 0; transform: translateX(-50%) translateY(-6px) scale(0.92); }
+  100% { opacity: 1; transform: translateX(-50%) translateY(0) scale(1); }
+}
+
+@keyframes battle-effect-burst {
+  0% { opacity: 0; transform: translateY(8px) scale(0.7); }
+  30% { opacity: 1; transform: translateY(0) scale(1.06); }
+  100% { opacity: 0; transform: translateY(-18px) scale(1); }
 }

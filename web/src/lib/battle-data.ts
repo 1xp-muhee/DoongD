@@ -32,9 +32,9 @@ export const wavePack: Fighter[][] = [
   ],
 ];
 
-export const skillLabels: Record<SkillId, { label: string; desc: string }> = {
-  claw: { label: "Claw", desc: "기본 공격. 안정적인 단일 타격" },
-  ember: { label: "Ember Burst", desc: "강한 화염 타격. 높은 피해" },
-  guard: { label: "Guard Roar", desc: "이번 턴 받는 피해를 감소" },
-  focus: { label: "Focus Breath", desc: "다음 행동을 위해 기세를 올림" },
+export const skillLabels: Record<SkillId, { label: string; desc: string; icon: string; color: string; effectText: string }> = {
+  claw: { label: "Claw", desc: "기본 공격. 안정적인 단일 타격", icon: "🗡️", color: "from-amber-700 to-red-800", effectText: "single-hit" },
+  ember: { label: "Ember Burst", desc: "강한 화염 타격. 높은 피해", icon: "🔥", color: "from-orange-500 to-red-700", effectText: "burst" },
+  guard: { label: "Guard Roar", desc: "이번 턴 받는 피해를 감소", icon: "🛡️", color: "from-sky-600 to-indigo-800", effectText: "guard" },
+  focus: { label: "Focus Breath", desc: "다음 행동을 위해 기세를 올림", icon: "✨", color: "from-violet-500 to-fuchsia-700", effectText: "charge" },
 };
